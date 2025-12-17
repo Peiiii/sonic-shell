@@ -1,0 +1,5 @@
+{
+  "name": "SONIC_SHELL",
+  "description": "A cyberpunk-themed live coding music workbench powered by Tone.js.",
+  "requestFramePermissions": []
+}
