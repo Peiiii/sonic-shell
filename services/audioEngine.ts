@@ -11,6 +11,11 @@ interface SandboxContext {
   Tone: typeof Tone; // Expose raw Tone for advanced users
 }
 
+export interface ExecutionResult {
+  success: boolean;
+  error?: string;
+}
+
 class AudioEngine {
   private synth: Tone.MonoSynth | null = null;
   private kick: Tone.MembraneSynth | null = null;
@@ -31,9 +36,10 @@ class AudioEngine {
   public async initialize() {
     await Tone.start();
     
-    // Initialize Analyser (Waveform) - acts as the Master Output node before Destination
+    // Initialize Analyser (Waveform default)
     if (!this.analyser) {
-        this.analyser = new Tone.Analyser("waveform", 512);
+        // Use a larger size for better FFT resolution
+        this.analyser = new Tone.Analyser("waveform", 2048); 
         this.analyser.toDestination();
     }
 
@@ -59,7 +65,6 @@ class AudioEngine {
     if (!this.hat) {
       // Metallic Hat
       this.hat = new Tone.MetalSynth({
-        frequency: 200,
         envelope: { attack: 0.001, decay: 0.1, release: 0.01 },
         harmonicity: 5.1,
         modulationIndex: 32,
@@ -88,6 +93,12 @@ class AudioEngine {
     }
   }
 
+  public setAnalyserType(type: 'waveform' | 'fft') {
+    if (this.analyser) {
+      this.analyser.type = type;
+    }
+  }
+
   public setBpm(bpm: number) {
     Tone.Transport.bpm.value = bpm;
   }
@@ -96,9 +107,13 @@ class AudioEngine {
     Tone.Transport.stop();
     Tone.Transport.cancel(); // Clears all scheduled events
     this.scheduledEvents = [];
+    
+    // Release all instruments to prevent stuck notes
+    if (this.poly) this.poly.releaseAll();
+    if (this.synth) this.synth.triggerRelease();
   }
 
-  public async runCode(code: string, logCallback: (msg: string, type: 'info'|'error') => void) {
+  public async runCode(code: string, logCallback: (msg: string, type: 'info'|'error') => void): Promise<ExecutionResult> {
     try {
       await this.initialize();
       
@@ -106,7 +121,6 @@ class AudioEngine {
       this.stop();
 
       // Define the custom loop function for the user
-      // We wrap Tone.Transport.scheduleRepeat
       const customLoop = (name: string, interval: string, callback: (time: number) => void) => {
         logCallback(`Scheduling loop: ${name} @ ${interval}`, 'info');
         const id = Tone.Transport.scheduleRepeat((time) => {
@@ -114,6 +128,8 @@ class AudioEngine {
             callback(time);
           } catch (err: any) {
             console.error(err);
+            // Runtime errors inside loop are async, hard to catch in the initial runCode Promise
+            // But we log them for the user
             logCallback(`Runtime Error inside loop '${name}': ${err.message}`, 'error');
           }
         }, interval);
@@ -121,13 +137,12 @@ class AudioEngine {
       };
 
       // Create the Function constructor to act as a sandbox
-      // The arguments match the keys we pass in 'args' below
       const runUserScript = new Function(
         'synth', 
         'kick', 
         'hat', 
-        'snare', // New
-        'poly',  // New
+        'snare',
+        'poly',
         'loop', 
         'Tone',
         `"use strict";\n${code}`
@@ -146,11 +161,11 @@ class AudioEngine {
 
       // Start the transport
       Tone.Transport.start();
-      return true;
+      return { success: true };
 
     } catch (error: any) {
       logCallback(`Compilation Error: ${error.message}`, 'error');
-      return false;
+      return { success: false, error: error.message };
     }
   }
 }
