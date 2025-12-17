@@ -5,6 +5,8 @@ interface SandboxContext {
   synth: Tone.MonoSynth;
   kick: Tone.MembraneSynth;
   hat: Tone.MetalSynth;
+  snare: Tone.NoiseSynth;
+  poly: Tone.PolySynth;
   loop: (name: string, interval: string, callback: (time: number) => void) => void;
   Tone: typeof Tone; // Expose raw Tone for advanced users
 }
@@ -13,6 +15,11 @@ class AudioEngine {
   private synth: Tone.MonoSynth | null = null;
   private kick: Tone.MembraneSynth | null = null;
   private hat: Tone.MetalSynth | null = null;
+  private snare: Tone.NoiseSynth | null = null;
+  private poly: Tone.PolySynth | null = null;
+  
+  // Public analyser for visualization
+  public analyser: Tone.Analyser | null = null;
   
   // Track scheduled event IDs to clear them later
   private scheduledEvents: number[] = [];
@@ -24,23 +31,29 @@ class AudioEngine {
   public async initialize() {
     await Tone.start();
     
+    // Initialize Analyser (Waveform) - acts as the Master Output node before Destination
+    if (!this.analyser) {
+        this.analyser = new Tone.Analyser("waveform", 512);
+        this.analyser.toDestination();
+    }
+
     if (!this.synth) {
       // Acid Bass Synth
       this.synth = new Tone.MonoSynth({
         oscillator: { type: "sawtooth" },
         envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 1 },
         filterEnvelope: { attack: 0.01, decay: 0.3, sustain: 0.1, baseFrequency: 200, octaves: 3 }
-      }).toDestination();
+      }).connect(this.analyser);
     }
 
     if (!this.kick) {
       // Punchy Kick
       this.kick = new Tone.MembraneSynth({
         pitchDecay: 0.05,
-        octaves: 6, // Fixed: Value must be within [0.5, 8]
+        octaves: 6,
         oscillator: { type: "sine" },
         envelope: { attack: 0.001, decay: 0.4, sustain: 0.01, release: 1.4 },
-      }).toDestination();
+      }).connect(this.analyser);
     }
 
     if (!this.hat) {
@@ -52,8 +65,26 @@ class AudioEngine {
         modulationIndex: 32,
         resonance: 4000,
         octaves: 1.5,
-      }).toDestination();
+      }).connect(this.analyser);
       this.hat.volume.value = -10;
+    }
+
+    if (!this.snare) {
+        // Noise Snare
+        this.snare = new Tone.NoiseSynth({
+            noise: { type: 'pink' },
+            envelope: { attack: 0.001, decay: 0.2, sustain: 0 }
+        }).connect(this.analyser);
+        this.snare.volume.value = -8;
+    }
+
+    if (!this.poly) {
+        // Polyphonic Synth for Chords
+        this.poly = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: "triangle" },
+            envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 1 }
+        }).connect(this.analyser);
+        this.poly.volume.value = -12;
     }
   }
 
@@ -95,6 +126,8 @@ class AudioEngine {
         'synth', 
         'kick', 
         'hat', 
+        'snare', // New
+        'poly',  // New
         'loop', 
         'Tone',
         `"use strict";\n${code}`
@@ -105,6 +138,8 @@ class AudioEngine {
         this.synth,
         this.kick,
         this.hat,
+        this.snare,
+        this.poly,
         customLoop,
         Tone
       );

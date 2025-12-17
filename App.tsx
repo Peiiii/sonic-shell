@@ -1,33 +1,42 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Square, Activity, Terminal, Zap, Volume2, Save, Trash2, Sliders } from 'lucide-react';
+import { Play, Square, Activity, Terminal, Zap, Trash2, Sliders } from 'lucide-react';
+import * as Tone from 'tone';
 import { audioService } from './services/audioEngine';
 import { LogEntry } from './types';
 
-// Default code preset
+// Updated code preset with new instruments
 const DEFAULT_CODE = `// :: SONIC SHELL ::
-// Update code & click RUN
+// Live Coding Environment
 
-// 1. Bass Kick - 4 on the floor
+// 1. Kick (4/4)
 loop("kick", "4n", (time) => {
   kick.triggerAttackRelease("C1", "8n", time);
 });
 
-// 2. Acid Bassline
+// 2. Snare (Backbeat)
+loop("snare", "2n", (time) => {
+  // Offset by a quarter note to hit on 2 & 4
+  const t = time + Tone.Time("4n").toSeconds();
+  snare.triggerAttackRelease("8n", t);
+});
+
+// 3. Acid Bassline
 loop("bass", "8n", (time) => {
   const notes = ["C2", "C2", "Eb2", "G2", "C3", "Bb2"];
   const n = notes[Math.floor(Math.random() * notes.length)];
-  
-  // Randomize velocity for groove
   const vel = 0.5 + Math.random() * 0.5;
   synth.triggerAttackRelease(n, "8n", time, vel);
 });
 
-// 3. Hi-Hats offbeat
-loop("hats", "8n", (time) => {
-   // 50% chance to play
-   if(Math.random() > 0.5) {
-     hat.triggerAttackRelease("32n", time, 0.3);
-   }
+// 4. Ethereal Chords
+loop("pads", "1m", (time) => {
+   // Randomly choose a chord
+   const chords = [
+     ["C3", "Eb3", "G3", "Bb3"],
+     ["F3", "Ab3", "C4", "Eb4"]
+   ];
+   const c = chords[Math.floor(Math.random() * chords.length)];
+   poly.triggerAttackRelease(c, "1m", time);
 });
 `;
 
@@ -36,7 +45,11 @@ const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [bpm, setBpm] = useState<number>(120);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Initialize Logs
   useEffect(() => {
@@ -52,6 +65,82 @@ const App: React.FC = () => {
   useEffect(() => {
     audioService.setBpm(bpm);
   }, [bpm]);
+
+  // Visualizer Loop
+  useEffect(() => {
+    let animationId: number;
+    
+    const render = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Ensure canvas size matches display size
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      
+      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+      }
+
+      const width = rect.width;
+      const height = rect.height;
+
+      // Clear with trail effect
+      ctx.fillStyle = 'rgba(5, 5, 5, 0.2)'; 
+      ctx.fillRect(0, 0, width, height);
+
+      // Get Data
+      let values: Float32Array | number[] = new Float32Array(0);
+      if (audioService.analyser) {
+        values = audioService.analyser.getValue();
+      }
+
+      if (values.length > 0) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#4ade80'; // Green-400
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = '#4ade80';
+        ctx.beginPath();
+
+        const sliceWidth = width / values.length;
+        let x = 0;
+
+        for (let i = 0; i < values.length; i++) {
+          const v = values[i] as number; // -1 to 1
+          // Scale to canvas height. v=0 is middle.
+          const y = (1 + v) * (height / 2);
+
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+          x += sliceWidth;
+        }
+        
+        ctx.stroke();
+      } else {
+         // Idle Line
+         ctx.beginPath();
+         ctx.strokeStyle = '#14532d';
+         ctx.lineWidth = 1;
+         ctx.shadowBlur = 0;
+         ctx.moveTo(0, height / 2);
+         ctx.lineTo(width, height / 2);
+         ctx.stroke();
+      }
+
+      animationId = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => cancelAnimationFrame(animationId);
+  }, []);
 
   const addLog = useCallback((message: string, type: LogEntry['type']) => {
     const newLog: LogEntry = {
@@ -90,17 +179,26 @@ const App: React.FC = () => {
     addLog("Buffer cleared.", "system");
   };
 
+  // Sync scroll between textarea and line numbers
+  const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    if (lineNumbersRef.current) {
+      lineNumbersRef.current.scrollTop = e.currentTarget.scrollTop;
+    }
+  };
+
+  const lineCount = code.split('\n').length;
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-green-400 font-mono flex flex-col selection:bg-green-900 selection:text-green-100 overflow-hidden">
+    <div className="h-screen bg-zinc-950 text-green-400 font-mono flex flex-col selection:bg-green-900 selection:text-green-100 overflow-hidden">
       
       {/* BACKGROUND EFFECTS */}
       <div className="fixed inset-0 pointer-events-none z-0 opacity-10 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]"></div>
       
       {/* HEADER */}
-      <header className="h-16 border-b border-green-500/30 flex items-center justify-between px-6 z-10 bg-zinc-950/90 backdrop-blur">
+      <header className="h-16 shrink-0 border-b border-green-500/30 flex items-center justify-between px-6 z-10 bg-zinc-950/90 backdrop-blur">
         <div className="flex items-center gap-3">
           <Activity className={`w-6 h-6 ${isPlaying ? 'animate-pulse text-green-400' : 'text-green-800'}`} />
-          <h1 className="text-xl font-bold tracking-widest text-shadow-glow">SONIC_SHELL <span className="text-xs opacity-50 font-normal">v1.0</span></h1>
+          <h1 className="text-xl font-bold tracking-widest text-shadow-glow">SONIC_SHELL <span className="text-xs opacity-50 font-normal">v1.1</span></h1>
         </div>
         
         <div className="flex items-center gap-6">
@@ -129,57 +227,58 @@ const App: React.FC = () => {
         
         {/* LEFT: EDITOR */}
         <section className="w-3/5 flex flex-col border-r border-green-500/30">
-          <div className="bg-zinc-900/50 px-4 py-2 text-xs flex justify-between items-center border-b border-green-500/20 text-green-500/70">
+          <div className="bg-zinc-900/50 px-4 py-2 text-xs flex justify-between items-center border-b border-green-500/20 text-green-500/70 shrink-0">
             <span className="flex items-center gap-2"><Terminal className="w-3 h-3"/> MAIN.JS</span>
             <span>UTF-8</span>
           </div>
-          <div className="flex-1 relative group">
-            <textarea 
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              className="w-full h-full bg-[#050505] text-green-400 p-6 resize-none outline-none border-none font-mono text-sm leading-relaxed"
-              spellCheck="false"
-              autoComplete="off"
-            />
-            {/* Editor Glow Overlay */}
-            <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]"></div>
+          
+          <div className="flex-1 relative flex bg-[#050505] min-h-0">
+            {/* Line Numbers */}
+            <div 
+              ref={lineNumbersRef}
+              className="w-12 pt-6 pr-2 text-right text-green-900 select-none overflow-hidden font-mono text-sm leading-relaxed border-r border-green-900/20 h-full"
+            >
+              {Array.from({ length: lineCount }).map((_, i) => (
+                <div key={i}>{i + 1}</div>
+              ))}
+            </div>
+
+            {/* Editor Area */}
+            <div className="flex-1 relative group h-full">
+              <textarea 
+                ref={textareaRef}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                onScroll={handleScroll}
+                className="w-full h-full bg-transparent text-green-400 p-6 pt-6 resize-none outline-none border-none font-mono text-sm leading-relaxed"
+                spellCheck="false"
+                autoComplete="off"
+              />
+              {/* Editor Glow Overlay */}
+              <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]"></div>
+            </div>
           </div>
         </section>
 
         {/* RIGHT: OUTPUT & VISUALS */}
         <section className="w-2/5 flex flex-col bg-zinc-900/20">
           
-          {/* TOP: VISUALIZER (Fake Oscilloscope) */}
-          <div className="h-1/3 border-b border-green-500/30 relative flex items-center justify-center overflow-hidden bg-black">
-            <div className="absolute top-2 left-2 text-[10px] opacity-50 tracking-widest">OSCILLOSCOPE_A</div>
+          {/* TOP: VISUALIZER (Real Canvas) */}
+          <div className="h-1/3 border-b border-green-500/30 relative flex items-center justify-center overflow-hidden bg-black shrink-0">
+            <div className="absolute top-2 left-2 text-[10px] opacity-50 tracking-widest z-10">OSCILLOSCOPE_X</div>
             
-            {isPlaying ? (
-              <div className="flex items-end justify-center gap-1 h-32 w-full px-8">
-                {[...Array(20)].map((_, i) => (
-                  <div 
-                    key={i}
-                    className="w-2 bg-green-500/80 shadow-[0_0_8px_rgba(74,222,128,0.8)]"
-                    style={{
-                      height: `${20 + Math.random() * 60}%`,
-                      animation: `pulse 0.1s infinite alternate`,
-                      animationDelay: `${i * 0.05}s`
-                    }}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="w-full h-[1px] bg-green-900/50 relative">
-                <div className="absolute top-1/2 left-0 w-full h-[1px] bg-green-500/20 animate-pulse"></div>
-              </div>
-            )}
+            <canvas 
+              ref={canvasRef} 
+              className="w-full h-full block"
+            />
             
             {/* Grid overlay */}
-            <div className="absolute inset-0 bg-[linear-gradient(rgba(0,255,0,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(0,255,0,0.05)_1px,transparent_1px)] bg-[length:20px_20px]"></div>
+            <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(0,255,0,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(0,255,0,0.05)_1px,transparent_1px)] bg-[length:20px_20px]"></div>
           </div>
 
           {/* BOTTOM: CONSOLE */}
           <div className="flex-1 flex flex-col min-h-0 bg-[#0a0a0a]">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-green-500/20 bg-zinc-900/50">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-green-500/20 bg-zinc-900/50 shrink-0">
               <span className="text-xs font-bold opacity-70 flex items-center gap-2">
                 <Zap className="w-3 h-3" /> KERNEL_LOG
               </span>
@@ -207,7 +306,7 @@ const App: React.FC = () => {
       </main>
 
       {/* FOOTER: CONTROLS */}
-      <footer className="h-20 bg-zinc-950 border-t border-green-500/30 flex items-center justify-between px-8 z-20">
+      <footer className="h-20 shrink-0 bg-zinc-950 border-t border-green-500/30 flex items-center justify-between px-8 z-20">
         <div className="flex items-center gap-4">
            <button 
              onClick={handleRun}
